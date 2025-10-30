@@ -3,6 +3,7 @@ package gomcp
 import (
 	"fmt"
 	"log"
+	"reflect"
 
 	"github.com/mcpunzo/gomcp/internal/type_converter"
 	"github.com/mcpunzo/gomcp/types"
@@ -47,6 +48,108 @@ func (m *MCPServer) AddTool(tool *types.Tool) {
 	m.tools[tool.Name] = tool
 }
 
+// AddToolFunc adds a tool to the MCPServer using a simplified handler function.
+// The handler function should have the signature:
+//
+//	func(args AnyStruct) (*types.ToolResult, error)
+//
+// where AnyStruct is a struct type defining the input parameters for the tool.
+// The input schema is automatically generated based on the fields of the struct.
+func (m *MCPServer) AddToolFunc(name, description string, handler any) {
+	v := reflect.ValueOf(handler)
+	if v.Kind() != reflect.Func {
+		panic("handler must be a function func (args AnyStruct) (*types.ToolResult, error)")
+	}
+
+	t := v.Type()
+	if t.NumIn() == 0 {
+		panic("handler need to have a parameter of type struct")
+	}
+
+	arg := t.In(0)
+	if arg.Kind() == reflect.Ptr {
+		arg = arg.Elem()
+	}
+
+	if arg.Kind() != reflect.Struct {
+		panic("handler parameter need to be of type struct")
+	}
+
+	props := map[string]any{}
+	required := []string{}
+
+	for i := range arg.NumField() {
+		field := arg.Field(i)
+		name := field.Name
+		props[name] = map[string]any{"type": field.Type.Kind().String()}
+		required = append(required, name)
+	}
+
+	inputSchema := map[string]any{
+		"type":       "object",
+		"properties": props,
+		"required":   required,
+	}
+
+	m.tools[name] = types.NewTool(name, description, inputSchema, func(args any) (*types.ToolResult, error) {
+		v := reflect.ValueOf(handler)
+		in := []reflect.Value{reflect.ValueOf(args)}
+
+		results := v.Call(in)
+
+		if len(results) != 2 {
+			return nil, fmt.Errorf("handler must return (*types.ToolResult, error)")
+		}
+
+		var res *types.ToolResult
+		var err error
+
+		// ✅ Safe parse primo valore
+		rv := results[0]
+		if rv.IsValid() {
+			// Non chiamare IsNil se non è nillable!
+			if rv.Kind() == reflect.Ptr || rv.Kind() == reflect.Interface ||
+				rv.Kind() == reflect.Map || rv.Kind() == reflect.Slice ||
+				rv.Kind() == reflect.Func || rv.Kind() == reflect.Chan {
+				if rv.IsNil() {
+					// ok, lascia res = nil
+				} else {
+					val := rv.Interface()
+					if r, ok := val.(*types.ToolResult); ok {
+						res = r
+					} else {
+						return nil, fmt.Errorf("handler must return (*types.ToolResult, error)")
+					}
+				}
+			} else {
+				// tipo non nillable → errore
+				return nil, fmt.Errorf("handler must return (*types.ToolResult, error)")
+			}
+		}
+
+		// ✅ Safe parse secondo valore
+		ev := results[1]
+		if ev.IsValid() {
+			if ev.Kind() == reflect.Interface || ev.Kind() == reflect.Ptr {
+				if !ev.IsNil() {
+					val := ev.Interface()
+					if e, ok := val.(error); ok {
+						err = e
+					} else {
+						return nil, fmt.Errorf("handler must return (*types.ToolResult, error)")
+					}
+				}
+			} else if ev.Type().Implements(reflect.TypeOf((*error)(nil)).Elem()) {
+				err, _ = ev.Interface().(error)
+			} else {
+				return nil, fmt.Errorf("handler must return (*types.ToolResult, error)")
+			}
+		}
+
+		return res, err
+	})
+}
+
 // AddResource adds a resource to the MCPServer.
 func (m *MCPServer) AddResource(resource *types.Resource) {
 	m.resources[resource.URI] = resource
@@ -54,12 +157,12 @@ func (m *MCPServer) AddResource(resource *types.Resource) {
 
 // Tools returns a list of all registered tools.
 func (m *MCPServer) Tools() []types.Tool {
-	return type_converter.MapToArray(m.tools)
+	return type_converter.MapValueToArray(m.tools)
 }
 
 // Resources returns a list of all registered resources.
 func (m *MCPServer) Resources() []types.Resource {
-	return type_converter.MapToArray(m.resources)
+	return type_converter.MapValueToArray(m.resources)
 }
 
 // HandleRequest handles an incoming JSON-RPC request and returns the appropriate response.

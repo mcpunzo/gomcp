@@ -6,7 +6,7 @@ import (
 	"github.com/mcpunzo/gomcp/types"
 )
 
-func TestMapToArray(t *testing.T) {
+func TestMapValueToArray(t *testing.T) {
 	table := []struct {
 		input    map[string]*types.Tool
 		expected []types.Tool
@@ -27,7 +27,7 @@ func TestMapToArray(t *testing.T) {
 		},
 	}
 	for _, entry := range table {
-		result := MapToArray(entry.input)
+		result := MapValueToArray(entry.input)
 		if len(result) != len(entry.expected) {
 			t.Errorf("Expected length %d but got %d", len(entry.expected), len(result))
 		}

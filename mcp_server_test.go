@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/mcpunzo/gomcp/types"
@@ -72,6 +73,7 @@ func TestHandleRequestWithCallTool(t *testing.T) {
 
 	err := errors.New("worng parameter")
 	content := []types.OperationContent{*types.NewOperationContent("text", "content of file£", "", nil)}
+
 	tool := types.NewTool(
 		"read_file",
 		"read_file tool description",
@@ -80,18 +82,16 @@ func TestHandleRequestWithCallTool(t *testing.T) {
 			"properties": map[string]any{"path": map[string]string{"type": "string"}},
 			"required":   []string{"path"},
 		},
-		func(args map[string]any) (*types.ToolResult, error) {
-			path, ok := args["path"]
+		func(args any) (*types.ToolResult, error) {
+			params, ok := args.(map[string]any)
 			if !ok {
 				return nil, err
 			}
 
-			path, ok = path.(string)
-			if !ok {
+			path, ok := params["path"].(string)
+			if !ok || path == "" {
 				return nil, err
 			}
-
-			log.Print(path)
 
 			return types.NewToolResult(content), nil
 		},
@@ -205,6 +205,222 @@ func TestAddTool(t *testing.T) {
 	if !reflect.DeepEqual(tools[0], *tool) {
 		t.Errorf("expected %v but got %v", *tool, tools[0])
 	}
+}
+
+func TestAddTooFunc(t *testing.T) {
+	mcpserver, teardown := setupTest(t)
+	defer teardown(t)
+
+	expectedInputSpec := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"test": map[string]any{"type": "string"}},
+		"required":   []string{"test"},
+	}
+
+	expectedName := "tool"
+	expectedDescription := "tool"
+
+	type ExpectedhandlerArgs struct {
+		test string
+	}
+
+	expectedResult := types.NewToolResult([]types.OperationContent{*types.NewOperationContent("text", "content", "", nil)})
+	expectedHandler := func(arg ExpectedhandlerArgs) (*types.ToolResult, error) {
+		return expectedResult, nil
+	}
+
+	tools := mcpserver.Tools()
+	if len(tools) > 0 {
+		t.Errorf("expected 0 but got %v", len(tools))
+	}
+
+	mcpserver.AddToolFunc(expectedName, expectedDescription, expectedHandler)
+
+	tools = mcpserver.Tools()
+	if len(tools) != 1 {
+		t.Errorf("expected 0 but got %v", len(tools))
+	}
+
+	if tools[0].Name != expectedName {
+		t.Errorf("expected %v but got %v", expectedName, tools[0].Name)
+	}
+
+	if tools[0].Description != expectedDescription {
+		t.Errorf("expected %v but got %v", expectedDescription, tools[0].Description)
+	}
+
+	if !reflect.DeepEqual(tools[0].InputSchema, expectedInputSpec) {
+		t.Errorf("expected %v but got %v", expectedInputSpec, tools[0].InputSchema)
+	}
+
+	result, err := tools[0].Run(ExpectedhandlerArgs{test: "value"})
+	if err != nil {
+		t.Errorf("expected not nil but got %v", err)
+	}
+
+	if !reflect.DeepEqual(result, expectedResult) {
+		t.Errorf("expected %v but got %v", expectedResult, result)
+	}
+}
+
+func TestAddToolFunc_Panics(t *testing.T) {
+	mcpserver, teardown := setupTest(t)
+	defer teardown(t)
+
+	tests := []struct {
+		name      string
+		handler   any
+		wantPanic string
+	}{
+		{
+			name:      "non-function handler",
+			handler:   123,
+			wantPanic: "handler must be a function",
+		},
+		{
+			name: "no parameter handler",
+			handler: func() (*types.ToolResult, error) {
+				return nil, nil
+			},
+			wantPanic: "handler need to have a parameter of type struct",
+		},
+		{
+			name: "parameter not struct",
+			handler: func(x int) (*types.ToolResult, error) {
+				return nil, nil
+			},
+			wantPanic: "handler parameter need to be of type struct",
+		},
+		{
+			name: "pointer to non-struct",
+			handler: func(x *int) (*types.ToolResult, error) {
+				return nil, nil
+			},
+			wantPanic: "handler parameter need to be of type struct",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("expected panic %q, but did not panic", tt.wantPanic)
+				} else {
+					rstr := r.(string)
+					if !contains(rstr, tt.wantPanic) {
+						t.Errorf("expected panic %q, but got %q", tt.wantPanic, rstr)
+					}
+				}
+			}()
+
+			mcpserver.AddToolFunc("test", "desc", tt.handler)
+		})
+	}
+}
+
+func TestAddToolFunc_ValidHandler(t *testing.T) {
+	mcpserver, teardown := setupTest(t)
+	defer teardown(t)
+
+	type MyArgs struct {
+		Foo string
+		Bar int
+	}
+
+	expectedResult := types.NewToolResult([]types.OperationContent{*types.NewOperationContent("text", "content", "", nil)})
+
+	handler := func(a MyArgs) (*types.ToolResult, error) {
+		if a.Foo != "foo" || a.Bar != 42 {
+			return nil, errors.New("wrong args")
+		}
+		return expectedResult, nil
+	}
+
+	mcpserver.AddToolFunc("tool1", "descrizione", handler)
+
+	tool, ok := mcpserver.tools["tool1"]
+	if !ok {
+		t.Fatalf("tool not found in map")
+	}
+
+	expectedSchema := map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"Foo": map[string]any{"type": "string"},
+			"Bar": map[string]any{"type": "int"},
+		},
+		"required": []string{"Foo", "Bar"},
+	}
+
+	if !reflect.DeepEqual(tool.InputSchema, expectedSchema) {
+		t.Errorf("schema mismatch:\nexpected %#v\ngot %#v", expectedSchema, tool.InputSchema)
+	}
+
+	run := reflect.ValueOf(tool.Run)
+	if run.Kind() != reflect.Func {
+		t.Fatalf("Run is not a function")
+	}
+
+	args := MyArgs{Foo: "foo", Bar: 42}
+	out, err := tool.Run(args)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out != expectedResult {
+		t.Errorf("expected result %v, got %v", expectedResult, out)
+	}
+}
+
+func TestAddToolFunc_InvalidHandlerReturn(t *testing.T) {
+	mcpserver, teardown := setupTest(t)
+	defer teardown(t)
+
+	type Args struct{ Foo string }
+
+	tests := []struct {
+		name    string
+		handler any
+	}{
+		{
+			name:    "no return values",
+			handler: func(a Args) {},
+		},
+		{
+			name: "one return value only",
+			handler: func(a Args) *types.ToolResult {
+				return nil
+			},
+		},
+		{
+			name: "wrong return types",
+			handler: func(a Args) (string, int) {
+				return "oops", 0
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mcpserver.AddToolFunc("badtool", "desc", tt.handler)
+
+			tool := mcpserver.tools["badtool"]
+			if tool == nil {
+				t.Fatalf("tool not registered")
+			}
+
+			// Prova a eseguire il Run: deve ritornare errore
+			_, err := tool.Run(Args{Foo: "x"})
+			if err == nil {
+				t.Errorf("expected error for handler with invalid return types")
+			} else if !strings.Contains(err.Error(), "handler must return (*types.ToolResult, error)") {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && reflect.DeepEqual(s[:len(substr)], substr)
 }
 
 func TestAddResource(t *testing.T) {

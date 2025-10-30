@@ -1,13 +1,14 @@
 package types
 
 // ToolHandler defines the function signature for tool execution handlers.
-type ToolHandler func(args map[string]any) (*ToolResult, error)
+// It takes an input a struct containing the parameters of the function.
+type ToolHandler func(any) (*ToolResult, error)
 
 // Tool represents a tool that can be called via the MCP protocol.
 type Tool struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	InputSchema any    `json:"inputSchema"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	InputSchema map[string]any `json:"inputSchema"`
 	Run         ToolHandler
 }
 
@@ -28,7 +29,7 @@ type ToolResult struct {
 }
 
 // NewTool creates a new Tool with the given parameters.
-func NewTool(name, description string, inputSchema any, handler ToolHandler) *Tool {
+func NewTool(name, description string, inputSchema map[string]any, handler ToolHandler) *Tool {
 	return &Tool{name, description, inputSchema, handler}
 }
 
