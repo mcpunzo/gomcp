@@ -32,6 +32,13 @@ const (
 	ReadResource  = "resources/read"
 )
 
+var (
+	ErrHandlerNotFunction  = errors.New("handler must be a function")
+	ErrHandlerWrongArgs    = errors.New("handler must accept exactly 1 argument")
+	ErrHandlerWrongReturns = errors.New("handler must return exactly 2 values (*types.ToolResult, error)")
+	ErrHandlerArgNotStruct = errors.New("handler argument must be a struct")
+)
+
 type MCPServer struct {
 	name            string
 	version         string
@@ -55,30 +62,30 @@ func (m *MCPServer) AddToolFunc(name, description string, handler any) error {
 
 	// handler must be a func
 	if handlerType.Kind() != reflect.Func {
-		return errors.New("handler must be a function")
+		return ErrHandlerNotFunction
 	}
 
 	// check the func signature
 	if handlerType.NumIn() != 1 {
-		return errors.New("handler must accept exactly 1 argument")
+		return ErrHandlerWrongArgs
 	}
 
 	if handlerType.NumOut() != 2 {
-		return errors.New("handler must return exactly 2 values")
+		return ErrHandlerWrongReturns
 	}
 
 	// input type must be a struct
 	argType := handlerType.In(0)
 	if argType.Kind() != reflect.Struct {
-		return errors.New("handler argument must be a struct")
+		return ErrHandlerArgNotStruct
 	}
 
 	// check the output types
 	if handlerType.Out(0) != reflect.TypeOf((*types.ToolResult)(nil)) {
-		return errors.New("handler first return value must be *types.ToolResult")
+		return ErrHandlerWrongReturns
 	}
 	if !handlerType.Out(1).Implements(reflect.TypeOf((*error)(nil)).Elem()) {
-		return errors.New("handler second return value must be error")
+		return ErrHandlerWrongReturns
 	}
 
 	// Generate the InputSchema from the struct

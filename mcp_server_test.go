@@ -205,6 +205,53 @@ func TestAddTool(t *testing.T) {
 	}
 }
 
+func TestAddToolFuncWithInvalidSignature(t *testing.T) {
+	mcpserver, teardown := setupTest(t)
+	defer teardown(t)
+
+	table := []struct {
+		handler  any
+		expected error
+	}{
+		{
+			map[string]any{},
+			ErrHandlerNotFunction,
+		},
+		{
+			func() (*types.ToolResult, error) { return nil, nil },
+			ErrHandlerWrongArgs,
+		},
+		{
+			func(_ struct{}) error { return nil },
+			ErrHandlerWrongReturns,
+		},
+		{
+			func(_ map[string]any) (*types.ToolResult, error) { return nil, nil },
+			ErrHandlerArgNotStruct,
+		},
+		{
+			func(_ struct{}) (*types.ToolResult, any) { return nil, nil },
+			ErrHandlerWrongReturns,
+		},
+		{
+			func(_ struct{}) (any, error) { return nil, nil },
+			ErrHandlerWrongReturns,
+		},
+	}
+
+	for _, test := range table {
+		err := mcpserver.AddToolFunc("", "", test.handler)
+
+		if err == nil {
+			t.Errorf("Expected %#v but got %#v", test.expected, nil)
+		}
+
+		if !errors.Is(err, test.expected) {
+			t.Errorf("Expected %#v but got %#v", test.expected, err)
+		}
+	}
+}
+
 func TestAddTooFunc(t *testing.T) {
 	mcpserver, teardown := setupTest(t)
 	defer teardown(t)

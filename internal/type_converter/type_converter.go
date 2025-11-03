@@ -14,18 +14,3 @@ func MapValueToArray[T any](m map[string]*T) []T {
 
 	return arr
 }
-
-// MapKeyToArray converts a map to a slice of its keys.
-// If the input map is nil, it returns nil.
-func MapKeyToArray[T any](m map[string]T) []string {
-	if m == nil {
-		return nil
-	}
-
-	arr := make([]string, 0, len(m))
-	for k := range m {
-		arr = append(arr, k)
-	}
-
-	return arr
-}
