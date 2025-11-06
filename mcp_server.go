@@ -17,10 +17,9 @@ const (
 	ErrMethodNotFound = -32601
 	ErrInvalidParams  = -32602
 	ErrInternal       = -32603
-
-	ErrServerGeneric = -32000
-	ErrAccessDenied  = -32001
-	ErrNotFound      = -32002
+	ErrServerGeneric  = -32000
+	ErrAccessDenied   = -32001
+	ErrNotFound       = -32002
 )
 
 const (
@@ -32,6 +31,8 @@ const (
 	ReadResource  = "resources/read"
 )
 
+const ShutdownMessage = "MCP Session terminated"
+
 var (
 	ErrHandlerNotFunction  = errors.New("handler must be a function")
 	ErrHandlerWrongArgs    = errors.New("handler must accept exactly 1 argument")
@@ -40,16 +41,53 @@ var (
 )
 
 type MCPServer struct {
-	name            string
-	version         string
-	shutdownMessage string
-	tools           map[string]*types.Tool
-	resources       map[string]*types.Resource
+	name      string
+	version   string
+	tools     map[string]*types.Tool
+	resources map[string]*types.Resource
+	transport Transport
 }
 
 // New creates a new MCPServer instance with the given name and version.
 func New(name, version string) *MCPServer {
-	return &MCPServer{name, version, "MCP Session terminated", make(map[string]*types.Tool), make(map[string]*types.Resource)}
+	return &MCPServer{name, version, make(map[string]*types.Tool), make(map[string]*types.Resource), nil}
+}
+
+// WithTransport sets the transport for the MCPServer.
+func (m *MCPServer) WithTransport(transport Transport) *MCPServer {
+	transport.SetMCPServer(m)
+	m.transport = transport
+	return m
+}
+
+// Start starts the MCPServer using the configured transport.
+func (m *MCPServer) Run() {
+	log.Println("Starting MCP Server...")
+	if m.transport == nil {
+		log.Fatal("No transport defined for MCP Server")
+	}
+
+	m.transport.Start()
+}
+
+// Handle processes a raw JSON-RPC request string and returns the JSON-RPC response string.
+func (m *MCPServer) Handle(request string) (string, error) {
+	var req types.JSONRPCRequest
+
+	if err := json.Unmarshal([]byte(request), &req); err != nil {
+		response := m.handleError("", "Parse error", ErrParse, err.Error())
+		respBytes, _ := json.Marshal(response)
+		return string(respBytes), nil
+	}
+
+	response := m.HandleRequest(&req)
+	respBytes, err := json.Marshal(response)
+	if err != nil {
+		response = m.handleError(req.Id, "Generic Server Error", ErrServerGeneric, err.Error())
+		respBytes, _ = json.Marshal(response)
+	}
+
+	return string(respBytes), nil
 }
 
 // AddTool adds a tool to the MCPServer.
@@ -132,26 +170,6 @@ func (m *MCPServer) AddToolFunc(name, description string, handler any) error {
 	return nil
 }
 
-func (m *MCPServer) generateJSONSchema(t reflect.Type) map[string]any {
-	props := map[string]any{}
-	required := []string{}
-
-	for i := range t.NumField() {
-		field := t.Field(i)
-		name := field.Name
-		props[name] = map[string]any{"type": field.Type.Kind().String()}
-		required = append(required, name)
-	}
-
-	inputSchema := map[string]any{
-		"type":       "object",
-		"properties": props,
-		"required":   required,
-	}
-
-	return inputSchema
-}
-
 // AddResource adds a resource to the MCPServer.
 func (m *MCPServer) AddResource(resource *types.Resource) {
 	m.resources[resource.URI] = resource
@@ -198,7 +216,7 @@ func (m *MCPServer) handleError(id, message string, code int, data any) *types.J
 }
 
 func (m *MCPServer) handleShutdown(req *types.JSONRPCRequest) *types.JSONRPCResponse {
-	return types.NewJSONRPCResponse(req.Id, types.NewShutdownResult(m.shutdownMessage), nil)
+	return types.NewJSONRPCResponse(req.Id, types.NewShutdownResult(ShutdownMessage), nil)
 }
 
 func (m *MCPServer) handleListTools(req *types.JSONRPCRequest) *types.JSONRPCResponse {
@@ -210,9 +228,13 @@ func (m *MCPServer) handleListResources(req *types.JSONRPCRequest) *types.JSONRP
 }
 
 func (m *MCPServer) handleCallTool(req *types.JSONRPCRequest) *types.JSONRPCResponse {
-	params, ok := req.Params.(*types.CallToolParams)
+	paramsBytes, _ := json.Marshal(req.Params)
+	var params types.CallToolParams
+	if err := json.Unmarshal(paramsBytes, &params); err != nil {
+		return m.handleError(req.Id, "Invalid parameters", ErrInvalidParams, req.Method)
+	}
 
-	if !ok {
+	if params.Name == "" {
 		return m.handleError(req.Id, "Invalid parameters", ErrInvalidParams, req.Method)
 	}
 
@@ -230,9 +252,13 @@ func (m *MCPServer) handleCallTool(req *types.JSONRPCRequest) *types.JSONRPCResp
 }
 
 func (m *MCPServer) handleReadResource(req *types.JSONRPCRequest) *types.JSONRPCResponse {
-	params, ok := req.Params.(*types.ReadResourceParams)
+	paramsBytes, _ := json.Marshal(req.Params)
+	var params types.ReadResourceParams
+	if err := json.Unmarshal(paramsBytes, &params); err != nil {
+		return m.handleError(req.Id, "Invalid parameters", ErrInvalidParams, req.Method)
+	}
 
-	if !ok {
+	if params.URI == "" {
 		return m.handleError(req.Id, "Invalid parameters", ErrInvalidParams, req.Method)
 	}
 
@@ -247,4 +273,24 @@ func (m *MCPServer) handleReadResource(req *types.JSONRPCRequest) *types.JSONRPC
 	}
 
 	return types.NewJSONRPCResponse(req.Id, types.NewReadResourceResult(content), nil)
+}
+
+func (m *MCPServer) generateJSONSchema(t reflect.Type) map[string]any {
+	props := map[string]any{}
+	required := []string{}
+
+	for i := range t.NumField() {
+		field := t.Field(i)
+		name := field.Name
+		props[name] = map[string]any{"type": field.Type.Kind().String()}
+		required = append(required, name)
+	}
+
+	inputSchema := map[string]any{
+		"type":       "object",
+		"properties": props,
+		"required":   required,
+	}
+
+	return inputSchema
 }

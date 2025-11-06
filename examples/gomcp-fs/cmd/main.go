@@ -1,13 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"os"
 
 	"github.com/mcpunzo/gomcp"
+	"github.com/mcpunzo/gomcp/internal/transport"
 	"github.com/mcpunzo/gomcp/types"
 )
 
@@ -16,44 +15,12 @@ type FSReaderParams struct {
 }
 
 func main() {
-	mcp := gomcp.New("name", "v1.0.0")
-
+	mcp := gomcp.New("gomcp-fs", "v1.0.0").WithTransport(transport.NewStdIOTransport())
 	addLsTool(mcp)
 	addCdTool(mcp)
 	addPwdTool(mcp)
 
-	handleRequests(mcp, types.NewJSONRPCRequest("id1", gomcp.Initialize, types.NewInitializeParams("test", "v0.0.1")))
-	handleRequests(mcp, types.NewJSONRPCRequest("id2", gomcp.ListResources, nil))
-	handleRequests(mcp, types.NewJSONRPCRequest("id3", gomcp.ListTools, nil))
-
-	handleRequests(mcp, types.NewJSONRPCRequest("pwd1",
-		gomcp.CallTool,
-		types.NewCallToolParams("pwd", nil)))
-
-	handleRequests(mcp, types.NewJSONRPCRequest("ls1",
-		gomcp.CallTool,
-		types.NewCallToolParams("ls", map[string]any{"Path": "../"})))
-
-	handleRequests(mcp, types.NewJSONRPCRequest("cd1",
-		gomcp.CallTool,
-		types.NewCallToolParams("cd", map[string]any{"Path": "../"})))
-
-	handleRequests(mcp, types.NewJSONRPCRequest("pwd2",
-		gomcp.CallTool,
-		types.NewCallToolParams("pwd", nil)))
-
-	handleRequests(mcp, types.NewJSONRPCRequest("finish", gomcp.Shutdown, nil))
-}
-
-func handleRequests(mcpserver *gomcp.MCPServer, request *types.JSONRPCRequest) {
-	response := mcpserver.HandleRequest(request)
-
-	res, err := json.Marshal(response)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("res: %+s\n", res)
+	mcp.Run()
 }
 
 func addLsTool(mcp *gomcp.MCPServer) {

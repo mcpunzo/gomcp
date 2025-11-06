@@ -1,7 +1,9 @@
 package gomcp
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"reflect"
 	"testing"
@@ -28,6 +30,24 @@ func TestMCPServerNew(t *testing.T) {
 	defer teardown(t)
 }
 
+type MockTransport struct{}
+
+func (m *MockTransport) SetMCPServer(mcpserver *MCPServer) {}
+func (m *MockTransport) Start()                            {}
+
+func TestWithTransport(t *testing.T) {
+	mcpserver, teardown := setupTest(t)
+	defer teardown(t)
+
+	mockTransport := &MockTransport{}
+
+	mcpserver.WithTransport(mockTransport)
+
+	if mcpserver.transport != mockTransport {
+		t.Errorf("Expected %v but got %v", mockTransport, mcpserver.transport)
+	}
+}
+
 func TestHandleRequest(t *testing.T) {
 	mcpserver, teardown := setupTest(t)
 	defer teardown(t)
@@ -46,7 +66,7 @@ func TestHandleRequest(t *testing.T) {
 		},
 		{
 			types.NewJSONRPCRequest("id", Shutdown, types.NewShutdownParams()),
-			types.NewJSONRPCResponse("id", types.NewShutdownResult(mcpserver.shutdownMessage), nil),
+			types.NewJSONRPCResponse("id", types.NewShutdownResult(ShutdownMessage), nil),
 		},
 		{
 			types.NewJSONRPCRequest("id", ListTools, nil),
@@ -113,6 +133,7 @@ func TestHandleRequestWithCallTool(t *testing.T) {
 			types.NewJSONRPCRequest("id", CallTool, types.NewCallToolParams("not_existing_tool", map[string]any{"path": "/tmp/example.txt"})),
 			types.NewJSONRPCResponse("id", nil, types.NewJSONRPCErrorObj(ErrMethodNotFound, "Unknown Tool", CallTool)),
 		},
+
 		{
 			types.NewJSONRPCRequest("id", CallTool, types.NewShutdownParams()),
 			types.NewJSONRPCResponse("id", nil, types.NewJSONRPCErrorObj(ErrInvalidParams, "Invalid parameters", CallTool)),
@@ -328,5 +349,113 @@ func TestAddResource(t *testing.T) {
 
 	if !reflect.DeepEqual(resources[0], *resource) {
 		t.Errorf("expected %v but got %v", *resource, resources[0])
+	}
+}
+
+func TestHandle(t *testing.T) {
+	mcpserver, teardown := setupTest(t)
+	defer teardown(t)
+
+	table := []struct {
+		request          string
+		expectedResponse string
+	}{
+		{
+			`{"jsonrpc":"2.0","id":"id1","method":"initialize","params":{"clientName":"testClient","clientVersion":"1.0"}}`,
+			fmt.Sprintf(`{"jsonrpc":"2.0","id":"id1","result":{"serverInfo":{"name":"%v","version":"%v"},"capabilities":{"tools":%v,"resources":%v}}}`,
+				mcpserver.name, mcpserver.version, len(mcpserver.tools) > 0, len(mcpserver.resources) > 0),
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id2","method":"shutdown","params":{}}`,
+			`{"jsonrpc":"2.0","id":"id2","result":{"message":"MCP Session terminated"}}`,
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id3","method":"unknown_method","params":{}}`,
+			`{"jsonrpc":"2.0","id":"id3","error":{"code":-32601,"message":"Method Not Found","data":"unknown_method"}}`,
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id4","method":"tools/list","params":{}}`,
+			`{"jsonrpc":"2.0","id":"id4","result":{"tools":[]}}`,
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id5","method":"resources/list","params":{}}`,
+			`{"jsonrpc":"2.0","id":"id5","result":{"resources":[]}}`,
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id6","method":"tools/call","params":{"name":"non_existing_tool","arguments":{}}}`,
+			`{"jsonrpc":"2.0","id":"id6","error":{"code":-32601,"message":"Unknown Tool","data":"tools/call"}}`,
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id7","method":"resources/read","params":{"uri":"non_existing_resource"}}`,
+			`{"jsonrpc":"2.0","id":"id7","error":{"code":-32601,"message":"Unknown Resource","data":"resources/read"}}`,
+		},
+		{
+			`invalid_json`,
+			`{"jsonrpc":"2.0","id":"","error":{"code":-32700,"message":"Parse error","data":"invalid character 'i' looking for beginning of value"}}`,
+		},
+	}
+
+	for _, test := range table {
+		actualResponse, _ := mcpserver.Handle(test.request)
+		if actualResponse != test.expectedResponse {
+			t.Errorf("Expected %s but got %s", test.expectedResponse, actualResponse)
+		}
+	}
+}
+
+func TestHandleWithTools(t *testing.T) {
+	mcpserver, teardown := setupTest(t)
+	defer teardown(t)
+
+	expectedInputSpec := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"test": map[string]any{"type": "string"}},
+		"required":   []string{"test"},
+	}
+
+	expectedInputSchema, _ := json.Marshal(expectedInputSpec)
+	expectedName := "tool"
+	expectedDescription := "tool"
+
+	type ExpectedhandlerArgs struct {
+		test string
+	}
+
+	expectedResult := types.NewToolResult([]types.OperationContent{*types.NewOperationContent("text", "content", "", nil)})
+	expectedHandler := func(arg ExpectedhandlerArgs) (*types.ToolResult, error) {
+		return expectedResult, nil
+	}
+
+	mcpserver.AddToolFunc(expectedName, expectedDescription, expectedHandler)
+
+	table := []struct {
+		request          string
+		expectedResponse string
+	}{
+		{
+			`{"jsonrpc":"2.0","id":"id1","method":"initialize","params":{"clientName":"testClient","clientVersion":"1.0"}}`,
+			fmt.Sprintf(`{"jsonrpc":"2.0","id":"id1","result":{"serverInfo":{"name":"%v","version":"%v"},"capabilities":{"tools":%v,"resources":%v}}}`,
+				mcpserver.name, mcpserver.version, true, false),
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id4","method":"tools/list","params":{}}`,
+			fmt.Sprintf(`{"jsonrpc":"2.0","id":"id4","result":{"tools":[{"name":"%v","description":"%v","inputSchema":%v}]}}`,
+				expectedName, expectedDescription, string(expectedInputSchema)),
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id6","method":"tools/call","params":{"name":"non_existing_tool","arguments":{}}}`,
+			`{"jsonrpc":"2.0","id":"id6","error":{"code":-32601,"message":"Unknown Tool","data":"tools/call"}}`,
+		},
+		{
+			`{"jsonrpc":"2.0","id":"id7","method":"tools/call","params":{"name":"tool","arguments":{"test":"value"}}}`,
+			`{"jsonrpc":"2.0","id":"id7","result":{"content":[{"type":"text","text":"content"}]}}`,
+		},
+	}
+
+	for _, test := range table {
+		actualResponse, _ := mcpserver.Handle(test.request)
+		if actualResponse != test.expectedResponse {
+			t.Errorf("Expected %s but got %s", test.expectedResponse, actualResponse)
+		}
 	}
 }

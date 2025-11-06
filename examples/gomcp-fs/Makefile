@@ -1,4 +1,4 @@
-BINARY_NAME = gomcp-filesystem
+BINARY_NAME = gomcp-fs
 
 SRC_DIR = ./cmd
 
