@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"log"
 	"os"
 
 	"github.com/mcpunzo/gomcp"
@@ -24,6 +25,7 @@ func (s *StdioTransport) SetMCPServer(mcpserver *gomcp.MCPServer) {
 
 // Start starts the StdioTransport to read from stdin and write to stdout.
 func (s *StdioTransport) Start() {
+	log.Print("Server started")
 	reader := bufio.NewReader(os.Stdin)
 	writer := bufio.NewWriter(os.Stdout)
 

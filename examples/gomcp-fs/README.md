@@ -1,7 +1,6 @@
 # GoMCP File System Tools
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/your-username/your-repo)](https://goreportcard.com/report/github.com/your-username/your-repo)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Go Version](https://img.shields.io/badge/Go-1.24%2B-blue)](https://golang.org/doc/go1.24)
 
 A lightweight **Model Context Protocol (MCP)** server implemented in Go.  
@@ -72,7 +71,7 @@ To test locally you can simulate MCP requests by piping JSON messages to stdin o
 ### Initialize
 
 ```bash
-> echo '{"jsonrpc":"2.0","id":"id1","method":"initialize","params":{"clientName":"testClient","clientVersion":"1.0"}' | ./bin/gomcp-fs
+> echo '{"jsonrpc":"2.0","id":"id1","method":"initialize","params":{"clientName":"testClient","clientVersion":"1.0"}}' | ./bin/gomcp-fs
 > Starting MCP Server...
 > Handling request: initialize
 {"jsonrpc":"2.0","id":"id1","result":{"serverInfo":{"name":"gomcp-fs","version":"v1.0.0"},"capabilities":{"tools":true,"resources":false}}}
